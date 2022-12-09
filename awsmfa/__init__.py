@@ -18,17 +18,23 @@ from awsmfa.util import log_error_and_exit, prompter
 
 logger = logging.getLogger('aws-mfa')
 
-AWS_CREDS_PATH = '%s/.aws/credentials' % (os.path.expanduser('~'),)
+# AWS_CREDS_PATH = '%s/.aws/credentials' % (os.path.expanduser('~'),)
+# AWS_CONF_PATH = '%s/.aws/config' % (os.path.expanduser('~'),)
+
+AWS_CONF_PATH = {
+    "CREDS" : '%s/.aws/credentials' % (os.path.expanduser('~'),),
+    "CONFS" : '%s/.aws/config' % (os.path.expanduser('~'),)
+}
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--device',
+    parser.add_argument('--device', '--serial',
                         required=False,
                         metavar='arn:aws:iam::123456788990:mfa/dudeman',
                         help="The MFA Device ARN. This value can also be "
-                        "provided via the environment variable 'MFA_DEVICE' or"
-                        " the ~/.aws/credentials variable 'aws_mfa_device'.")
+                        "provided via the environment variable 'MFA_SERIAL' or"
+                        " the ~/.aws/config variable 'mfa_serial'.")
     parser.add_argument('--duration',
                         type=int,
                         help="The duration, in seconds, that the temporary "
@@ -88,31 +94,34 @@ def main():
     level = getattr(logging, args.log_level)
     setup_logger(level)
 
-    if not os.path.isfile(AWS_CREDS_PATH):
+    if not os.path.isfile(AWS_CONF_PATH["CREDS"]):
         console_input = prompter()
         create = console_input("Could not locate credentials file at {}, "
                                "would you like to create one? "
-                               "[y/n]".format(AWS_CREDS_PATH))
+                               "[y/n]".format(AWS_CONF_PATH["CREDS"]))
         if create.lower() == "y":
-            with open(AWS_CREDS_PATH, 'a'):
+            with open(AWS_CONF_PATH["CREDS"], 'a'):
                 pass
         else:
             log_error_and_exit(logger, 'Could not locate credentials file at '
-                               '%s' % (AWS_CREDS_PATH,))
+                               '%s' % (AWS_CONF_PATH["CREDS"],))
 
-    config = get_config(AWS_CREDS_PATH)
+    # config = get_config(AWS_CREDS_PATH)
+    config = {}
+    config['creds'] = get_config(AWS_CONF_PATH["CREDS"])
+    config['confs'] = get_config(AWS_CONF_PATH["CONFS"])
 
     if args.setup:
-        initial_setup(logger, config, AWS_CREDS_PATH)
+        initial_setup(logger, config, AWS_CONF_PATH)
         return
 
     validate(args, config)
 
 
-def get_config(aws_creds_path):
+def get_config(path):
     config = configparser.RawConfigParser()
     try:
-        config.read(aws_creds_path)
+        config.read(path)
     except configparser.ParsingError:
         e = sys.exc_info()[1]
         log_error_and_exit(logger, "There was a problem reading or parsing "
@@ -146,9 +155,9 @@ def validate(args, config):
 
     if args.assume_role:
         role_msg = "with assumed role: %s" % (args.assume_role,)
-    elif config.has_option(args.profile, 'assumed_role_arn'):
+    elif config['creds'].has_option(args.profile, 'assumed_role_arn'):
         role_msg = "with assumed role: %s" % (
-            config.get(args.profile, 'assumed_role_arn'))
+            config['creds'].get(args.profile, 'assumed_role_arn'))
     else:
         role_msg = ""
     logger.info('Validating credentials for profile: %s %s' %
@@ -156,8 +165,8 @@ def validate(args, config):
     reup_message = "Obtaining credentials for a new role or profile."
 
     try:
-        key_id = config.get(long_term_name, 'aws_access_key_id')
-        access_key = config.get(long_term_name, 'aws_secret_access_key')
+        key_id = config['creds'].get(long_term_name, 'aws_access_key_id')
+        access_key = config['creds'].get(long_term_name, 'aws_secret_access_key')
     except NoSectionError:
         log_error_and_exit(logger,
                            "Long term credentials session '[%s]' is missing. "
@@ -166,24 +175,31 @@ def validate(args, config):
                            "'aws_secret_access_key'" % (long_term_name,))
     except NoOptionError as e:
         log_error_and_exit(logger, e)
+    
+    # now you should have got key_id and access_key, it is time to get region_name
+    try:
+        region_name = config['confs'].get("profile {}".format(long_term_name), 'region')
+    except NoSectionError:
+        region_name = 'us-east-2' # default region
 
     # get device from param, env var or config
     if not args.device:
-        if os.environ.get('MFA_DEVICE'):
-            args.device = os.environ.get('MFA_DEVICE')
-        elif config.has_option(long_term_name, 'aws_mfa_device'):
-            args.device = config.get(long_term_name, 'aws_mfa_device')
+        if os.environ.get('MFA_SERIAL'):
+            args.device = os.environ.get('MFA_SERIAL')
+        elif config['confs'].has_option("profile {}".format(long_term_name), 'mfa_serial'):
+            # https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html
+            args.device = config['confs'].get("profile {}".format(long_term_name), 'mfa_serial')
         else:
             log_error_and_exit(logger,
                                'You must provide --device or MFA_DEVICE or set '
-                               '"aws_mfa_device" in ".aws/credentials"')
+                               '"mfa_serial" in ".aws/config"')
 
     # get assume_role from param or env var
     if not args.assume_role:
         if os.environ.get('MFA_ASSUME_ROLE'):
             args.assume_role = os.environ.get('MFA_ASSUME_ROLE')
-        elif config.has_option(long_term_name, 'assume_role'):
-            args.assume_role = config.get(long_term_name, 'assume_role')
+        elif config['creds'].has_option(long_term_name, 'assume_role'):
+            args.assume_role = config['creds'].get(long_term_name, 'assume_role')
 
     # get duration from param, env var or set default
     if not args.duration:
@@ -197,19 +213,19 @@ def validate(args, config):
     force_refresh = False
 
     # Validate presence of short-term section
-    if not config.has_section(short_term_name):
+    if not config['creds'].has_section(short_term_name):
         logger.info("Short term credentials section %s is missing, "
                     "obtaining new credentials." % (short_term_name,))
         if short_term_name == 'default':
             try:
-                config.add_section(short_term_name)
+                config['creds'].add_section(short_term_name)
             # a hack for creating a section named "default"
             except ValueError:
                 configparser.DEFAULTSECT = short_term_name
-                config.set(short_term_name, 'CREATE', 'TEST')
-                config.remove_option(short_term_name, 'CREATE')
+                config['creds'].set(short_term_name, 'CREATE', 'TEST')
+                config['creds'].remove_option(short_term_name, 'CREATE')
         else:
-            config.add_section(short_term_name)
+            config['creds'].add_section(short_term_name)
         force_refresh = True
     # Validate option integrity of short-term section
     else:
@@ -220,14 +236,14 @@ def validate(args, config):
         try:
             short_term = {}
             for option in required_options:
-                short_term[option] = config.get(short_term_name, option)
+                short_term[option] = config['creds'].get(short_term_name, option)
         except NoOptionError:
             logger.warn("Your existing credentials are missing or invalid, "
                         "obtaining new credentials.")
             force_refresh = True
 
         try:
-            current_role = config.get(short_term_name, 'assumed_role_arn')
+            current_role = config['creds'].get(short_term_name, 'assumed_role_arn')
         except NoOptionError:
             current_role = None
 
@@ -261,7 +277,7 @@ def validate(args, config):
     # Unless we're forcing a refresh, check expiration.
     if not force_refresh:
         exp = datetime.datetime.strptime(
-            config.get(short_term_name, 'expiration'), '%Y-%m-%d %H:%M:%S')
+            config['creds'].get(short_term_name, 'expiration'), '%Y-%m-%d %H:%M:%S')
         diff = exp - datetime.datetime.utcnow()
         if diff.total_seconds() <= 0:
             logger.info("Your credentials have expired, renewing.")
@@ -273,10 +289,10 @@ def validate(args, config):
                 % (diff.total_seconds(), exp))
 
     if should_refresh:
-        get_credentials(short_term_name, key_id, access_key, args, config)
+        get_credentials(short_term_name, key_id, access_key, region_name, args, config)
 
 
-def get_credentials(short_term_name, lt_key_id, lt_access_key, args, config):
+def get_credentials(short_term_name, lt_key_id, lt_access_key, lt_region, args, config):
     if args.token:
         logger.debug("Received token as argument")
         mfa_token = '%s' % (args.token)
@@ -285,11 +301,11 @@ def get_credentials(short_term_name, lt_key_id, lt_access_key, args, config):
         mfa_token = console_input('Enter AWS MFA code for device [%s] '
                                   '(renewing for %s seconds):' %
                                   (args.device, args.duration))
-
     client = boto3.client(
         'sts',
         aws_access_key_id=lt_key_id,
-        aws_secret_access_key=lt_access_key
+        aws_secret_access_key=lt_access_key,
+        region_name = lt_region
     )
 
     if args.assume_role:
@@ -315,12 +331,12 @@ def get_credentials(short_term_name, lt_key_id, lt_access_key, args, config):
         except ParamValidationError:
             log_error_and_exit(logger, "Token must be six digits")
 
-        config.set(
+        config['creds'].set(
             short_term_name,
             'assumed_role',
             'True',
         )
-        config.set(
+        config['creds'].set(
             short_term_name,
             'assumed_role_arn',
             args.assume_role,
@@ -343,12 +359,12 @@ def get_credentials(short_term_name, lt_key_id, lt_access_key, args, config):
                 logger,
                 "Token must be six digits")
 
-        config.set(
+        config['creds'].set(
             short_term_name,
             'assumed_role',
             'False',
         )
-        config.remove_option(short_term_name, 'assumed_role_arn')
+        config['creds'].remove_option(short_term_name, 'assumed_role_arn')
 
     # aws_session_token and aws_security_token are both added
     # to support boto and boto3
@@ -360,19 +376,26 @@ def get_credentials(short_term_name, lt_key_id, lt_access_key, args, config):
     ]
 
     for option, value in options:
-        config.set(
+        config['creds'].set(
             short_term_name,
             option,
             response['Credentials'][value]
         )
     # Save expiration individiually, so it can be manipulated
-    config.set(
+    config['creds'].set(
         short_term_name,
         'expiration',
         response['Credentials']['Expiration'].strftime('%Y-%m-%d %H:%M:%S')
     )
-    with open(AWS_CREDS_PATH, 'w') as configfile:
-        config.write(configfile)
+    with open(AWS_CONF_PATH['CREDS'], 'w') as configfile:
+        config['creds'].write(configfile)
+
+    config['confs'].add_section("profile {}".format(short_term_name))
+    config['confs'].set(
+            "profile {}".format(short_term_name), "region", lt_region  # short_term has the same region as long_term
+    )
+    with open(AWS_CONF_PATH['CONFS'], 'w') as configfile:
+        config['confs'].write(configfile)
     logger.info(
         "Success! Your credentials will expire in %s seconds at: %s"
         % (args.duration, response['Credentials']['Expiration']))
