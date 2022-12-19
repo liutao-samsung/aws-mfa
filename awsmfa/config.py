@@ -1,16 +1,9 @@
 import getpass
-
-try:
-    import configparser
-    from configparser import NoOptionError, NoSectionError
-except ImportError:
-    import ConfigParser as configparser  # noqa
-    from ConfigParser import NoOptionError, NoSectionError  # noqa
-
 from awsmfa.util import log_error_and_exit, prompter
+from awsmfa.writer import ConfigFileWriter
 
 
-def initial_setup(logger, config, config_path):
+def initial_setup(logger, config_path):
     console_input = prompter()
 
     profile_name = console_input('Profile name to [%s]: ' % ("default"))
@@ -28,16 +21,27 @@ def initial_setup(logger, config, config_path):
     aws_region_name = input('aws_region_name: ')
     aws_mfa_serial = input('aws_mfa_serial: ')
 
-    config['creds'].add_section(profile_name)
-    config['creds'].set(profile_name, 'aws_access_key_id', aws_access_key_id)
-    config['creds'].set(profile_name, 'aws_secret_access_key', aws_secret_access_key)
-    with open(config_path['CREDS'], 'w') as configfile:
-        config['creds'].write(configfile)
+    conf_writer = ConfigFileWriter()
+    access_keyid_config = {
+        "__section__": profile_name,
+        "aws_access_key_id": aws_access_key_id,
+    }
+    secret_key_config = {
+        "__section__": profile_name,
+        "aws_secret_access_key": aws_secret_access_key,
+    }
+    conf_writer.update_config(access_keyid_config, config_path['CREDS'])
+    conf_writer.update_config(secret_key_config, config_path['CREDS'])
 
-    conf_section_name = "profile %s" % profile_name
-    config['confs'].add_section(conf_section_name)
-    config['confs'].set(conf_section_name, 'region', aws_region_name)
+    region_config = {
+        "__section__": "profile %s" % profile_name,
+        'region': aws_region_name
+    }
+    conf_writer.update_config(region_config, config_path['CONFS'])
+
     if aws_mfa_serial:
-        config['confs'].set(conf_section_name, 'mfa_serial', aws_mfa_serial)
-    with open(config_path['CONFS'], 'w') as configfile:
-        config['confs'].write(configfile)
+        mfa_serial_config = {
+        "__section__": "profile %s" % profile_name,
+        'mfa_serial': aws_mfa_serial
+        }
+        conf_writer.update_config(mfa_serial_config, config_path['CONFS'])

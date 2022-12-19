@@ -1,10 +1,10 @@
 import argparse
 try:
     import configparser
-    from configparser import NoOptionError, NoSectionError, DuplicateSectionError
+    from configparser import NoOptionError, NoSectionError
 except ImportError:
     import ConfigParser as configparser
-    from ConfigParser import NoOptionError, NoSectionError, DuplicateSectionError
+    from ConfigParser import NoOptionError, NoSectionError
 import datetime
 import getpass
 import logging
@@ -15,6 +15,7 @@ import boto3
 from botocore.exceptions import ClientError, ParamValidationError
 from awsmfa.config import initial_setup
 from awsmfa.util import log_error_and_exit, prompter
+from awsmfa.writer import ConfigFileWriter
 
 logger = logging.getLogger('aws-mfa')
 
@@ -112,7 +113,7 @@ def main():
     config['confs'] = get_config(AWS_CONF_PATH["CONFS"])
 
     if args.setup:
-        initial_setup(logger, config, AWS_CONF_PATH)
+        initial_setup(logger, AWS_CONF_PATH)
         return
 
     validate(args, config)
@@ -216,16 +217,6 @@ def validate(args, config):
     if not config['creds'].has_section(short_term_name):
         logger.info("Short term credentials section %s is missing, "
                     "obtaining new credentials." % (short_term_name,))
-        if short_term_name == 'default':
-            try:
-                config['creds'].add_section(short_term_name)
-            # a hack for creating a section named "default"
-            except ValueError:
-                configparser.DEFAULTSECT = short_term_name
-                config['creds'].set(short_term_name, 'CREATE', 'TEST')
-                config['creds'].remove_option(short_term_name, 'CREATE')
-        else:
-            config['creds'].add_section(short_term_name)
         force_refresh = True
     # Validate option integrity of short-term section
     else:
@@ -308,6 +299,8 @@ def get_credentials(short_term_name, lt_key_id, lt_access_key, lt_region, args, 
         region_name = lt_region
     )
 
+    conf_writer = ConfigFileWriter()
+
     if args.assume_role:
 
         logger.info("Assuming Role - Profile: %s, Role: %s, Duration: %s",
@@ -331,16 +324,17 @@ def get_credentials(short_term_name, lt_key_id, lt_access_key, lt_region, args, 
         except ParamValidationError:
             log_error_and_exit(logger, "Token must be six digits")
 
-        config['creds'].set(
-            short_term_name,
-            'assumed_role',
-            'True',
-        )
-        config['creds'].set(
-            short_term_name,
-            'assumed_role_arn',
-            args.assume_role,
-        )
+        assumed_role_config = {
+            "__section__": short_term_name,
+            'assumed_role': "True"
+        }
+        conf_writer.update_config(assumed_role_config, AWS_CONF_PATH['CREDS'])
+        assumed_role_arn_config = {
+            "__section__": short_term_name,
+            'assumed_role_arn': args.assume_role
+        }
+        conf_writer.update_config(assumed_role_arn_config, AWS_CONF_PATH['CREDS'])
+
     else:
         logger.info("Fetching Credentials - Profile: %s, Duration: %s",
                     short_term_name, args.duration)
@@ -359,12 +353,16 @@ def get_credentials(short_term_name, lt_key_id, lt_access_key, lt_region, args, 
                 logger,
                 "Token must be six digits")
 
-        config['creds'].set(
-            short_term_name,
-            'assumed_role',
-            'False',
-        )
-        config['creds'].remove_option(short_term_name, 'assumed_role_arn')
+        assumed_role_config = {
+            "__section__": short_term_name,
+            'assumed_role': "False"
+        }
+        conf_writer.update_config(assumed_role_config, AWS_CONF_PATH['CREDS'])
+        assumed_role_arn_config = {
+            "__section__": short_term_name,
+            'assumed_role_arn': ''
+        }
+        conf_writer.update_config(assumed_role_arn_config, AWS_CONF_PATH['CREDS'])
 
     # aws_session_token and aws_security_token are both added
     # to support boto and boto3
@@ -375,30 +373,25 @@ def get_credentials(short_term_name, lt_key_id, lt_access_key, lt_region, args, 
         ('aws_security_token', 'SessionToken'),
     ]
 
+    
     for option, value in options:
-        config['creds'].set(
-            short_term_name,
-            option,
-            response['Credentials'][value]
-        )
+        option_conf = {
+            "__section__": short_term_name,
+            option: response['Credentials'][value]
+        }
+        conf_writer.update_config(option_conf, AWS_CONF_PATH['CREDS'])
     # Save expiration individiually, so it can be manipulated
-    config['creds'].set(
-        short_term_name,
-        'expiration',
-        response['Credentials']['Expiration'].strftime('%Y-%m-%d %H:%M:%S')
-    )
-    with open(AWS_CONF_PATH['CREDS'], 'w') as configfile:
-        config['creds'].write(configfile)
+    expiration_conf = {
+        "__section__": short_term_name,
+        "expiration": response['Credentials']['Expiration'].strftime('%Y-%m-%d %H:%M:%S')
+    }
+    conf_writer.update_config(expiration_conf, AWS_CONF_PATH['CREDS'])
 
-    try:
-        config['confs'].add_section("profile {}".format(short_term_name))
-    except DuplicateSectionError:
-        pass
-    config['confs'].set(
-            "profile {}".format(short_term_name), "region", lt_region  # short_term has the same region as long_term
-    )
-    with open(AWS_CONF_PATH['CONFS'], 'w') as configfile:
-        config['confs'].write(configfile)
+    region_config = {
+        "__section__": short_term_name,
+        'region': lt_region
+    }
+    conf_writer.update_config(region_config, AWS_CONF_PATH['CONFS'])
     logger.info(
         "Success! Your credentials will expire in %s seconds at: %s"
         % (args.duration, response['Credentials']['Expiration']))
