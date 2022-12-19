@@ -1,10 +1,10 @@
 import argparse
 try:
     import configparser
-    from configparser import NoOptionError, NoSectionError
+    from configparser import NoOptionError, NoSectionError, DuplicateSectionError
 except ImportError:
     import ConfigParser as configparser
-    from ConfigParser import NoOptionError, NoSectionError
+    from ConfigParser import NoOptionError, NoSectionError, DuplicateSectionError
 import datetime
 import getpass
 import logging
@@ -390,7 +390,10 @@ def get_credentials(short_term_name, lt_key_id, lt_access_key, lt_region, args, 
     with open(AWS_CONF_PATH['CREDS'], 'w') as configfile:
         config['creds'].write(configfile)
 
-    config['confs'].add_section("profile {}".format(short_term_name))
+    try:
+        config['confs'].add_section("profile {}".format(short_term_name))
+    except DuplicateSectionError:
+        pass
     config['confs'].set(
             "profile {}".format(short_term_name), "region", lt_region  # short_term has the same region as long_term
     )
