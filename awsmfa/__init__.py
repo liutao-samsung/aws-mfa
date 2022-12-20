@@ -357,12 +357,12 @@ def get_credentials(short_term_name, lt_key_id, lt_access_key, lt_region, args, 
             "__section__": short_term_name,
             'assumed_role': "False"
         }
-        conf_writer.update_config(assumed_role_config, AWS_CONF_PATH['CREDS'])
-        assumed_role_arn_config = {
-            "__section__": short_term_name,
-            'assumed_role_arn': ''
-        }
-        conf_writer.update_config(assumed_role_arn_config, AWS_CONF_PATH['CREDS'])
+        # conf_writer.update_config(assumed_role_config, AWS_CONF_PATH['CREDS'])
+        # assumed_role_arn_config = {
+        #     "__section__": short_term_name,
+        #     'assumed_role_arn': ''
+        # }
+        # conf_writer.update_config(assumed_role_arn_config, AWS_CONF_PATH['CREDS'])
 
     # aws_session_token and aws_security_token are both added
     # to support boto and boto3
