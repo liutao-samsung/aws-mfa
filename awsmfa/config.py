@@ -33,11 +33,11 @@ def initial_setup(logger, config_path):
     conf_writer.update_config(access_keyid_config, config_path['CREDS'])
     conf_writer.update_config(secret_key_config, config_path['CREDS'])
 
-    # region_config = {
-    #     "__section__": "profile %s" % profile_name,
-    #     'region': aws_region_name
-    # }
-    # conf_writer.update_config(region_config, config_path['CONFS'])
+    region_config = {
+        "__section__": "profile %s" % profile_name,
+        'region': aws_region_name
+    }
+    conf_writer.update_config(region_config, config_path['CONFS'])
 
     if aws_mfa_serial:
         mfa_serial_config = {
