@@ -30,51 +30,39 @@ AWS_CONF_PATH = {
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--device', '--serial',
+    parser.add_argument('--device', '--serial', '-D',
                         required=False,
-                        metavar='arn:aws:iam::123456788990:mfa/dudeman',
+                        metavar='arn:aws-cn:iam::123456788990:mfa/dudeman',
                         help="The MFA Device ARN. This value can also be "
                         "provided via the environment variable 'MFA_SERIAL' or"
                         " the ~/.aws/config variable 'mfa_serial'.")
-    parser.add_argument('--duration',
+    parser.add_argument('--duration', '-d',
                         type=int,
                         help="The duration, in seconds, that the temporary "
                              "credentials should remain valid. Minimum value: "
                              "900 (15 minutes). Maximum: 129600 (36 hours). "
-                             "Defaults to 43200 (12 hours), or 3600 (one "
-                             "hour) when using '--assume-role'. This value "
+                             "Defaults to 43200 (12 hours). This value "
                              "can also be provided via the environment "
                              "variable 'MFA_STS_DURATION'. ")
-    parser.add_argument('--profile',
+    parser.add_argument('--profile', '-p',
                         help="If using profiles, specify the name here. The "
                         "default profile name is 'default'. The value can "
                         "also be provided via the environment variable "
                         "'AWS_PROFILE'.",
                         required=False)
-    parser.add_argument('--long-term-suffix', '--long-suffix',
+    parser.add_argument('--long-term-suffix', '--long-suffix', '-l',
                         help="The suffix appended to the profile name to"
                         "identify the long term credential section",
                         required=False)
-    parser.add_argument('--short-term-suffix', '--short-suffix',
+    parser.add_argument('--short-term-suffix', '--short-suffix', '-s',
                         help="The suffix appended to the profile name to"
                         "identify the short term credential section",
                         required=False)
-    parser.add_argument('--assume-role', '--assume',
-                        metavar='arn:aws:iam::123456788990:role/RoleName',
-                        help="The ARN of the AWS IAM Role you would like to "
-                        "assume, if specified. This value can also be provided"
-                        " via the environment variable 'MFA_ASSUME_ROLE'",
-                        required=False)
-    parser.add_argument('--role-session-name',
-                        help="Friendly session name required when using "
-                        "--assume-role",
-                        default=getpass.getuser(),
-                        required=False)
-    parser.add_argument('--force',
+    parser.add_argument('--force', '-F',
                         help="Refresh credentials even if currently valid.",
                         action="store_true",
                         required=False)
-    parser.add_argument('--log-level',
+    parser.add_argument('--log-level', '-L',
                         help="Set log level",
                         choices=[
                             'CRITICAL', 'ERROR', 'WARNING',
@@ -82,11 +70,11 @@ def main():
                         ],
                         required=False,
                         default='DEBUG')
-    parser.add_argument('--setup',
+    parser.add_argument('--setup', '-S',
                         help="Setup a new log term credentials section",
                         action="store_true",
                         required=False)
-    parser.add_argument('--token', '--mfa-token',
+    parser.add_argument('--token', '--mfa-token', '-t',
                         type=str,
                         help="Provide MFA token as an argument",
                         required=False)
@@ -154,16 +142,10 @@ def validate(args, config):
                            "The value for '--long-term-suffix' cannot "
                            "be equal to the value for '--short-term-suffix'")
 
-    if args.assume_role:
-        role_msg = "with assumed role: %s" % (args.assume_role,)
-    elif config['creds'].has_option(args.profile, 'assumed_role_arn'):
-        role_msg = "with assumed role: %s" % (
-            config['creds'].get(args.profile, 'assumed_role_arn'))
-    else:
-        role_msg = ""
+    
+    role_msg = ""
     logger.info('Validating credentials for profile: %s %s' %
                 (short_term_name, role_msg))
-    reup_message = "Obtaining credentials for a new role or profile."
 
     try:
         key_id = config['creds'].get(long_term_name, 'aws_access_key_id')
@@ -195,19 +177,12 @@ def validate(args, config):
                                'You must provide --device or MFA_DEVICE or set '
                                '"mfa_serial" in ".aws/config"')
 
-    # get assume_role from param or env var
-    if not args.assume_role:
-        if os.environ.get('MFA_ASSUME_ROLE'):
-            args.assume_role = os.environ.get('MFA_ASSUME_ROLE')
-        elif config['creds'].has_option(long_term_name, 'assume_role'):
-            args.assume_role = config['creds'].get(long_term_name, 'assume_role')
-
     # get duration from param, env var or set default
     if not args.duration:
         if os.environ.get('MFA_STS_DURATION'):
             args.duration = int(os.environ.get('MFA_STS_DURATION'))
         else:
-            args.duration = 3600 if args.assume_role else 43200
+            args.duration = 43200
 
     # If this is False, only refresh credentials if expired. Otherwise
     # always refresh.
@@ -220,8 +195,7 @@ def validate(args, config):
         force_refresh = True
     # Validate option integrity of short-term section
     else:
-        required_options = ['assumed_role',
-                            'aws_access_key_id', 'aws_secret_access_key',
+        required_options = ['aws_access_key_id', 'aws_secret_access_key',
                             'aws_session_token', 'aws_security_token',
                             'expiration']
         try:
@@ -240,27 +214,6 @@ def validate(args, config):
 
         if args.force:
             logger.info("Forcing refresh of credentials.")
-            force_refresh = True
-        # There are not credentials for an assumed role,
-        # but the user is trying to assume one
-        elif current_role is None and args.assume_role:
-            logger.info(reup_message)
-            force_refresh = True
-        # There are current credentials for a role and
-        # the role arn being provided is the same.
-        elif (current_role is not None and
-                args.assume_role and current_role == args.assume_role):
-            pass
-        # There are credentials for a current role and the role
-        # that is attempting to be assumed is different
-        elif (current_role is not None and
-              args.assume_role and current_role != args.assume_role):
-            logger.info(reup_message)
-            force_refresh = True
-        # There are credentials for a current role and no role arn is
-        # being supplied
-        elif current_role is not None and args.assume_role is None:
-            logger.info(reup_message)
             force_refresh = True
 
     should_refresh = True
@@ -301,68 +254,23 @@ def get_credentials(short_term_name, lt_key_id, lt_access_key, lt_region, args, 
 
     conf_writer = ConfigFileWriter()
 
-    if args.assume_role:
+    logger.info("Fetching Credentials - Profile: %s, Duration: %s",
+                short_term_name, args.duration)
+    try:
+        response = client.get_session_token(
+            DurationSeconds=args.duration,
+            SerialNumber=args.device,
+            TokenCode=mfa_token
+        )
+    except ClientError as e:
+        log_error_and_exit(
+            logger,
+            "An error occured while calling assume role: {}".format(e))
+    except ParamValidationError:
+        log_error_and_exit(
+            logger,
+            "Token must be six digits")
 
-        logger.info("Assuming Role - Profile: %s, Role: %s, Duration: %s",
-                    short_term_name, args.assume_role, args.duration)
-        if args.role_session_name is None:
-            log_error_and_exit(logger, "You must specify a role session name "
-                               "via --role-session-name")
-
-        try:
-            response = client.assume_role(
-                RoleArn=args.assume_role,
-                RoleSessionName=args.role_session_name,
-                DurationSeconds=args.duration,
-                SerialNumber=args.device,
-                TokenCode=mfa_token
-            )
-        except ClientError as e:
-            log_error_and_exit(logger,
-                               "An error occured while calling "
-                               "assume role: {}".format(e))
-        except ParamValidationError:
-            log_error_and_exit(logger, "Token must be six digits")
-
-        assumed_role_config = {
-            "__section__": short_term_name,
-            'assumed_role': "True"
-        }
-        conf_writer.update_config(assumed_role_config, AWS_CONF_PATH['CREDS'])
-        assumed_role_arn_config = {
-            "__section__": short_term_name,
-            'assumed_role_arn': args.assume_role
-        }
-        conf_writer.update_config(assumed_role_arn_config, AWS_CONF_PATH['CREDS'])
-
-    else:
-        logger.info("Fetching Credentials - Profile: %s, Duration: %s",
-                    short_term_name, args.duration)
-        try:
-            response = client.get_session_token(
-                DurationSeconds=args.duration,
-                SerialNumber=args.device,
-                TokenCode=mfa_token
-            )
-        except ClientError as e:
-            log_error_and_exit(
-                logger,
-                "An error occured while calling assume role: {}".format(e))
-        except ParamValidationError:
-            log_error_and_exit(
-                logger,
-                "Token must be six digits")
-
-        assumed_role_config = {
-            "__section__": short_term_name,
-            'assumed_role': "False"
-        }
-        # conf_writer.update_config(assumed_role_config, AWS_CONF_PATH['CREDS'])
-        # assumed_role_arn_config = {
-        #     "__section__": short_term_name,
-        #     'assumed_role_arn': ''
-        # }
-        # conf_writer.update_config(assumed_role_arn_config, AWS_CONF_PATH['CREDS'])
 
     # aws_session_token and aws_security_token are both added
     # to support boto and boto3
